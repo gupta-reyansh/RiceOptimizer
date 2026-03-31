@@ -4,7 +4,9 @@ File: CodonUtils.py
 Includes constants and helper functions used by other Python scripts.
 """
 
+import gzip
 import itertools
+import json
 import os
 import pickle
 import re
@@ -528,8 +530,8 @@ class IterableData(torch.utils.data.IterableDataset):
         # In multi-processing context, use 'os.environ' to
         # find global worker rank. Then use 'islice' to allocate
         # the items of the stream to the workers.
-        world_size = int(os.environ.get(self.world_size_handle))
-        global_rank = int(os.environ.get(self.rank_handle))
+        world_size = int(os.environ.get(self.world_size_handle, "1"))
+        global_rank = int(os.environ.get(self.rank_handle, "0"))
         local_rank = worker_info.id
         local_num_workers = worker_info.num_workers
 
@@ -553,6 +555,18 @@ class IterableJSONData(IterableData):
         super().__init__(**kwargs)
         self.data_path = data_path
         self.train = train
+
+    @property
+    def iterator(self) -> Iterator:
+        open_fn = gzip.open if self.data_path.endswith(".gz") else open
+        mode = "rt" if self.data_path.endswith(".gz") else "r"
+
+        with open_fn(self.data_path, mode, encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                yield json.loads(line)
 
 
 class ConfigManager(ABC):
