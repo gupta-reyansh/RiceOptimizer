@@ -181,7 +181,7 @@ def parse_args() -> argparse.Namespace:
         help="Keep records flagged as incorrect_seq when building the training set.",
     )
     parser.add_argument(
-        "--batch_size", type=int, default=6, help="Batch size for training."
+        "--batch_size", type=int, default=1, help="Batch size for training."
     )
     parser.add_argument(
         "--max_epochs", type=int, default=5, help="Maximum number of epochs to train."
@@ -192,7 +192,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--accumulate_grad_batches",
         type=int,
-        default=1,
+        default=6,
         help="Number of batches to accumulate gradients.",
     )
     parser.add_argument(

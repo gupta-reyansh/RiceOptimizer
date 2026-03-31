@@ -110,7 +110,6 @@ class plTrainHarness(pl.LightningModule):
         return [optimizer], [lr_scheduler]
 
     def training_step(self, batch, batch_idx):
-        self.model.bert.set_attention_type("block_sparse")
         outputs = self.model(**batch)
         self.log_dict(
             dictionary={
@@ -139,6 +138,21 @@ class EpochCheckpoint(pl.Callback):
             print(f"\nCheckpoint saved at {checkpoint_path}\n")
 
 
+def build_bigbird_config(tokenizer_length, type_vocab_size):
+    return BigBirdConfig(
+        vocab_size=tokenizer_length,
+        type_vocab_size=type_vocab_size,
+        sep_token_id=2,
+        attention_type="block_sparse",
+        max_position_embeddings=MAX_LEN,
+        block_size=32,
+    )
+
+
+def select_trainer_strategy(num_devices):
+    return "auto" if num_devices == 1 else "ddp_find_unused_parameters_true"
+
+
 def main(args):
     """Pretrain the CodonTransformer model."""
     pl.seed_everything(args.seed)
@@ -158,12 +172,10 @@ def main(args):
         )
     else:
         tokenizer = AutoTokenizer.from_pretrained("adibvafa/CodonTransformer")
-    config = BigBirdConfig(
-        vocab_size=len(tokenizer),
-        type_vocab_size=args.type_vocab_size,
-        sep_token_id=2,
-    )
+    config = build_bigbird_config(len(tokenizer), args.type_vocab_size)
     model = BigBirdForMaskedLM(config=config)
+    model.bert.set_attention_type(config.attention_type)
+    model.gradient_checkpointing_enable()
     harnessed_model = plTrainHarness(model, args.learning_rate, args.warmup_fraction)
 
     # Load the training data
@@ -178,11 +190,12 @@ def main(args):
 
     # Setup trainer and callbacks
     save_checkpoint = EpochCheckpoint(args.checkpoint_dir, args.save_interval)
+    num_devices = 1 if args.debug else args.num_gpus
     trainer = pl.Trainer(
         default_root_dir=args.checkpoint_dir,
-        strategy="ddp_find_unused_parameters_true",
+        strategy=select_trainer_strategy(num_devices),
         accelerator="gpu",
-        devices=1 if args.debug else args.num_gpus,
+        devices=num_devices,
         precision="16-mixed",
         max_epochs=args.max_epochs,
         deterministic=False,

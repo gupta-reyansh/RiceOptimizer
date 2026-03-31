@@ -190,7 +190,7 @@ python train_species_model.py \
   --organism "Fragaria vesca" \
   --work_dir "/absolute/path/to/workflows/fragaria_vesca_run01" \
   --codon_table 1 \
-  --batch_size 6 \
+  --batch_size 1 \
   --max_epochs 5 \
   --num_workers 5 \
   --num_gpus 1 \
@@ -222,10 +222,10 @@ python train_species_model.py \
 | `--tokenizer_path` | 本地 tokenizer.json 路径；为空时加载默认 Hugging Face tokenizer | 空 |
 | `--codon_table` | 显式指定 FASTA 翻译使用的 NCBI codon table | 自动推断 |
 | `--keep_all_records` | 是否保留 `correct_seq=False` 记录 | 关闭 |
-| `--batch_size` | 训练 batch size | `6` |
+| `--batch_size` | 训练 batch size | `1` |
 | `--max_epochs` | 训练轮数 | `5` |
 | `--num_workers` | DataLoader worker 数 | `5` |
-| `--accumulate_grad_batches` | 梯度累积步数 | `1` |
+| `--accumulate_grad_batches` | 梯度累积步数 | `6` |
 | `--num_gpus` | 使用 GPU 数量 | `1` |
 | `--learning_rate` | 学习率 | `5e-5` |
 | `--warmup_fraction` | warmup 比例 | `0.1` |
@@ -258,6 +258,8 @@ python train_species_model.py \
 - `parsed_cds_records.csv`：FASTA 解析后的原始记录，包括翻译结果与 `correct_seq` 标记。  
 - `training_sequences.csv`：最终用于重新训练的三列表格（`dna/protein/organism`）。  
 - `training_data.json`：供 `pretrain.py` 读取的 JSONL 数据。  
+
+> 显存较小的单卡环境建议保持默认的 `--batch_size 1 --accumulate_grad_batches 6`。这样可以显著降低瞬时显存占用，同时维持与旧默认值接近的有效 batch size。
 - `run_metadata.json`：本次运行的参数、物种名、局部 organism id 与样本规模摘要。  
 - `checkpoints/`：模型重新训练输出目录。  
 
