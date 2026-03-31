@@ -14,7 +14,12 @@ import os
 import pytorch_lightning as pl
 import torch
 from torch.utils.data import DataLoader
-from transformers import BigBirdConfig, BigBirdForMaskedLM, PreTrainedTokenizerFast
+from transformers import (
+    AutoTokenizer,
+    BigBirdConfig,
+    BigBirdForMaskedLM,
+    PreTrainedTokenizerFast,
+)
 
 from CodonTransformer.CodonUtils import (
     MAX_LEN,
@@ -131,19 +136,22 @@ def main(args):
     torch.set_float32_matmul_precision("medium")
 
     # Load the tokenizer and model
-    tokenizer = PreTrainedTokenizerFast(
-        tokenizer_file=args.tokenizer_path,
-        bos_token="[CLS]",
-        eos_token="[SEP]",
-        unk_token="[UNK]",
-        sep_token="[SEP]",
-        pad_token="[PAD]",
-        cls_token="[CLS]",
-        mask_token="[MASK]",
-    )
+    if args.tokenizer_path:
+        tokenizer = PreTrainedTokenizerFast(
+            tokenizer_file=args.tokenizer_path,
+            bos_token="[CLS]",
+            eos_token="[SEP]",
+            unk_token="[UNK]",
+            sep_token="[SEP]",
+            pad_token="[PAD]",
+            cls_token="[CLS]",
+            mask_token="[MASK]",
+        )
+    else:
+        tokenizer = AutoTokenizer.from_pretrained("adibvafa/CodonTransformer")
     config = BigBirdConfig(
         vocab_size=len(tokenizer),
-        type_vocab_size=NUM_ORGANISMS,
+        type_vocab_size=args.type_vocab_size,
         sep_token_id=2,
     )
     model = BigBirdForMaskedLM(config=config)
@@ -183,8 +191,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--tokenizer_path",
         type=str,
-        required=True,
-        help="Path to the tokenizer model file",
+        default="",
+        help="Path to the tokenizer model file. If omitted, loads the default Hugging Face tokenizer.",
     )
     parser.add_argument(
         "--train_data_path",
@@ -233,6 +241,12 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--seed", type=int, default=123, help="Random seed for reproducibility"
+    )
+    parser.add_argument(
+        "--type_vocab_size",
+        type=int,
+        default=NUM_ORGANISMS,
+        help="Size of the organism embedding vocabulary.",
     )
     parser.add_argument("--debug", action="store_true", help="Enable debug mode")
     args = parser.parse_args()
