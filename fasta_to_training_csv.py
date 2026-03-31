@@ -4,9 +4,56 @@ Convert a CDS FASTA file into the training CSV format expected by CodonTransform
 
 import argparse
 from pathlib import Path
+from typing import Tuple
 
+import pandas as pd
 from CodonTransformer.CodonData import read_fasta_file
 from CodonTransformer.CodonUtils import ORGANISM2ID
+
+
+def load_training_dataframe(
+    input_fasta: str,
+    organism: str,
+    keep_all_records: bool = False,
+) -> Tuple[pd.DataFrame, int]:
+    """
+    Read a CDS FASTA file and return the CodonTransformer training DataFrame.
+
+    Args:
+        input_fasta (str): Path to the input CDS FASTA file.
+        organism (str): Supported organism name from ORGANISM2ID.
+        keep_all_records (bool): Whether to keep records flagged as incorrect_seq.
+
+    Returns:
+        Tuple[pd.DataFrame, int]: Training DataFrame and total FASTA records parsed.
+    """
+    if organism not in ORGANISM2ID:
+        raise ValueError(
+            f"Unsupported organism: {organism}. "
+            "Please use an organism name that already exists in ORGANISM2ID."
+        )
+
+    input_path = Path(input_fasta)
+    fasta_df = read_fasta_file(
+        input_file=str(input_path),
+        save_to_file=None,
+        organism=organism,
+    )
+
+    total_records = len(fasta_df)
+    if not keep_all_records:
+        fasta_df = fasta_df.loc[fasta_df["correct_seq"]].copy()
+
+    if fasta_df.empty:
+        raise ValueError(
+            "No records were eligible for export. "
+            "Check whether the FASTA contains valid CDS sequences for this organism."
+        )
+
+    training_df = fasta_df.loc[:, ["dna", "protein"]].copy()
+    training_df["organism"] = organism
+
+    return training_df, total_records
 
 
 def build_training_csv(
@@ -27,34 +74,14 @@ def build_training_csv(
     Returns:
         tuple[int, int]: Number of records written and total FASTA records parsed.
     """
-    if organism not in ORGANISM2ID:
-        raise ValueError(
-            f"Unsupported organism: {organism}. "
-            "Please use an organism name that already exists in ORGANISM2ID."
-        )
-
-    input_path = Path(input_fasta)
     output_path = Path(output_csv)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    fasta_df = read_fasta_file(
-        input_file=str(input_path),
-        save_to_file=None,
+    training_df, total_records = load_training_dataframe(
+        input_fasta=input_fasta,
         organism=organism,
+        keep_all_records=keep_all_records,
     )
-
-    total_records = len(fasta_df)
-    if not keep_all_records:
-        fasta_df = fasta_df.loc[fasta_df["correct_seq"]].copy()
-
-    if fasta_df.empty:
-        raise ValueError(
-            "No records were eligible for export. "
-            "Check whether the FASTA contains valid CDS sequences for this organism."
-        )
-
-    training_df = fasta_df.loc[:, ["dna", "protein"]].copy()
-    training_df["organism"] = organism
     training_df.to_csv(output_path, index=False)
 
     return len(training_df), total_records
