@@ -69,7 +69,7 @@ def prepare_training_data(
     if not required_columns.issubset(dataset.columns):
         raise ValueError(f"Input dataset must have columns: {required_columns}")
 
-    # Prepare the dataset for finetuning
+    # Prepare the dataset for training
     dataset["codons"] = dataset.apply(
         lambda row: get_merged_seq(row["protein"], row["dna"], separator="_"), axis=1
     )

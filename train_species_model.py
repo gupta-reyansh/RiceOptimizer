@@ -6,7 +6,7 @@ import argparse
 import json
 import re
 from pathlib import Path
-from typing import Tuple
+from typing import Optional, Tuple
 
 import pandas as pd
 
@@ -39,7 +39,7 @@ def prepare_pretrain_inputs(
     organism: str,
     work_dir: Path,
     keep_all_records: bool,
-    codon_table: int | None,
+    codon_table: Optional[int],
 ) -> Tuple[pd.DataFrame, pd.DataFrame, Path, Path]:
     raw_dir = work_dir / "data" / "raw"
     processed_dir = work_dir / "data" / "processed"
