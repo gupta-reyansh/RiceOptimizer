@@ -214,6 +214,147 @@ print("物种:", df["organism"].value_counts().to_dict())
 2. 导出 CSI 前 10% 的样本  
 3. 同时保留全量版与高 CSI 版，后续分别微调并比较结果
 
+### 6.1 如何从原始基因组 / FASTA 批量计算 CSI 并筛选前 10%
+
+如果你手头还没有整理好的 `dna/protein/organism` 训练 CSV，而只有原始 CDS FASTA 或基因组导出的 FASTA，可按下面思路先批量整理，再计算 CSI。
+
+#### 方案 A：你已经有 CDS FASTA
+
+仓库里可以直接利用 `CodonData.read_fasta_file(...)` 把 FASTA 转成表格数据。它会：
+
+1. 读取 FASTA 中的 DNA 序列  
+2. 按物种对应的 codon table 翻译出 protein  
+3. 输出包含 `dna`、`protein`、`correct_seq`、`organism`、`GeneID` 等字段的 DataFrame
+
+示例流程：
+
+```python
+import pandas as pd
+from CodonTransformer.CodonData import read_fasta_file
+from CodonTransformer.CodonEvaluation import get_CSI_weights, get_CSI_value
+
+fasta_path = "<work_dir>/data/raw/your_species_cds.fasta"
+
+df = read_fasta_file(
+    input_file=fasta_path,
+    save_to_file=None,
+    organism="Escherichia coli general",  # 若 FASTA 注释里没有标准物种名，建议手动指定
+)
+
+# 只保留可正确翻译、长度合规的数据
+df = df[df["correct_seq"] == True].copy()
+df = df[df["dna"].str.len() % 3 == 0].copy()
+
+# 用当前物种自己的候选基因集合估计 CSI 权重
+weights = get_CSI_weights(df["dna"].tolist())
+
+# 为每条基因计算 CSI
+df["CSI"] = df["dna"].map(lambda seq: get_CSI_value(seq, weights))
+
+# 按 CSI 排序并取前 10%
+top_n = max(1, int(len(df) * 0.10))
+df_top10 = df.sort_values("CSI", ascending=False).head(top_n).copy()
+
+# 导出成后续训练所需三列
+train_df = df_top10[["dna", "protein", "organism"]]
+train_df.to_csv("<work_dir>/data/raw/your_species_training_top10_csi.csv", index=False)
+```
+
+#### 方案 B：你只有原始基因组 FASTA，而不是 CDS FASTA
+
+这种情况下，**不能直接把整条染色体 / scaffold FASTA 喂给 `prepare_training_data(...)`**。因为训练输入要求是一条条基因级别的 CDS 与对应蛋白配对。
+
+推荐流程是：
+
+1. 先用注释文件（GFF / GTF / GenBank 等）从基因组中提取 CDS  
+2. 生成 gene-level 的 CDS FASTA  
+3. 再按上面的方案 A 批量转表、算 CSI、筛前 10%
+
+也就是说，CodonTransformer 训练前真正需要的是：
+
+- 基因级 `dna`
+- 对应 `protein`
+- 对应 `organism`
+
+而不是整条基因组序列本身。
+
+#### 计算 CSI 时的注意事项
+
+1. **CSI 权重必须来自同一目标物种的数据**，不要混入其他物种。  
+2. 如果你的原始基因很多，建议先去掉明显异常或低质量的 CDS，再算 CSI。  
+3. 论文中的“前 10% CSI”是一个经验上很好的起点，但不是唯一可行值；你也可以比较 top 5%、top 10%、top 20% 三种子集。  
+4. 如果样本总量很小，盲目只保留前 10% 可能导致训练集过小，此时可以适当放宽阈值。  
+
+### 6.2 如果有不同组织的 FPKM / TPM / expression 文件，能不能作为输入数据？
+
+可以**作为筛选和加权训练样本的辅助信息**，但**不能直接作为 `prepare_training_data(...)` 的输入列**。
+
+原因是当前仓库的训练预处理只接受这三列：
+
+- `dna`
+- `protein`
+- `organism`
+
+也就是说：
+
+1. `FPKM`、`TPM`、组织名、发育时期、处理条件这些字段，当前不会被模型直接读取为额外特征。  
+2. 如果你把这些列直接附在 CSV 里，`prepare_training_data(...)` 不会利用它们来建模组织上下文。  
+3. 当前模型的“上下文”主要是 `organism`，不是 tissue / condition。
+
+#### 那 FPKM 文件有什么用？
+
+很有用，主要体现在**训练样本筛选策略**上：
+
+1. **高表达基因筛选**：优先保留高 FPKM 基因，再在其中计算 CSI 或直接与 CSI 联合排序。  
+2. **组织特异子集构建**：如果你只关心某一组织，可以先筛出该组织高表达基因，再构建该组织专用训练集。  
+3. **多组织交集/并集策略**：可选择多个组织中都高表达的基因，构建更稳健的数据集。  
+4. **联合打分**：例如先按表达量过滤，再按 CSI 排序，得到“高表达 + 高 CSI”的更高质量子集。
+
+#### 推荐的实际使用方式
+
+你可以先把 FASTA 转出来的基因表，与 FPKM 文件按 `GeneID` 或基因名合并，然后再决定保留哪些基因进入最终训练 CSV。
+
+例如思路如下：
+
+```python
+# fasta_df: 从 read_fasta_file(...) 得到，包含 GeneID / dna / protein / organism
+# expr_df: 你的表达量表，至少包含 GeneID 和 FPKM
+
+merged = fasta_df.merge(expr_df, on="GeneID", how="left")
+
+# 举例：先保留表达量较高的基因
+filtered = merged[merged["FPKM"] >= 1].copy()
+
+# 再在表达量过滤后的集合里计算 CSI
+weights = get_CSI_weights(filtered["dna"].tolist())
+filtered["CSI"] = filtered["dna"].map(lambda seq: get_CSI_value(seq, weights))
+
+# 最后按 CSI 取前 10%
+top_n = max(1, int(len(filtered) * 0.10))
+train_df = (
+    filtered.sort_values("CSI", ascending=False)
+    .head(top_n)[["dna", "protein", "organism"]]
+)
+```
+
+#### 什么时候 FPKM 特别值得用？
+
+1. 你做的不是“泛组织平均优化”，而是**某个组织/条件下的表达优化**。  
+2. 目标物种的基因很多，但你希望更接近“高表达天然基因”的子集。  
+3. 你的表达数据质量高，并且能和 FASTA / 注释中的基因 ID 准确对应。  
+
+#### 什么时候不要直接依赖 FPKM？
+
+1. FPKM 文件和基因 ID 对不上。  
+2. 不同组织、不同批次之间归一化方式不一致。  
+3. 表达量很高但 CDS 本身质量差、注释错、翻译不一致。  
+
+结论是：
+
+- **FPKM/TPM 不是直接训练输入特征**  
+- **但非常适合作为样本筛选信号**
+- 最稳妥的做法通常是：**先按表达量做过滤，再按 CSI 做排序**
+
 ---
 
 ## 7. 生成训练 JSON 文件
