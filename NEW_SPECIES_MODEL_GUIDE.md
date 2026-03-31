@@ -260,6 +260,23 @@ train_df = df_top10[["dna", "protein", "organism"]]
 train_df.to_csv("<work_dir>/data/raw/your_species_training_top10_csi.csv", index=False)
 ```
 
+如果你只是想先把用户提供的 CDS FASTA 直接转成项目训练所需的 CSV，也可以使用仓库根目录下新增的脚本：
+
+```bash
+cd <repo_root>
+python fasta_to_training_csv.py \
+  --input_fasta "<work_dir>/data/raw/your_species_cds.fasta" \
+  --organism "Escherichia coli general" \
+  --output_csv "<work_dir>/data/raw/your_species_training.csv"
+```
+
+这个脚本会：
+
+1. 用 Biopython 读取 CDS FASTA  
+2. 按给定物种对应的 codon table 翻译 protein  
+3. 默认只保留 `correct_seq=True` 的记录  
+4. 输出 `dna,protein,organism` 三列 CSV，供后续 `prepare_training_data(...)` 使用
+
 #### 方案 B：你只有原始基因组 FASTA，而不是 CDS FASTA
 
 这种情况下，**不能直接把整条染色体 / scaffold FASTA 喂给 `prepare_training_data(...)`**。因为训练输入要求是一条条基因级别的 CDS 与对应蛋白配对。
