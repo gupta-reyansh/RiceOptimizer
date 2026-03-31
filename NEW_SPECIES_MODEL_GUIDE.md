@@ -2,6 +2,11 @@
 
 本文档说明如何在当前仓库中，基于已有的 CodonTransformer 预训练模型，对**单一物种**进行重新训练（finetune），并产出可用于后续推理的新模型文件。
 
+下文统一使用：
+
+- `<repo_root>`：CodonTransformer 仓库根目录
+- `<work_dir>`：你的单物种训练工作目录，例如 `<repo_root>/workflows/<your_species>`
+
 > 适用范围  
 > - 适用于：对仓库当前已支持的物种做单物种继续训练/微调。  
 > - 不直接适用于：向当前模型中加入一个**全新、未收录的新物种**。当前代码会校验 `organism` 必须存在于 `CodonTransformer/CodonUtils.py` 的 `ORGANISM2ID` 中，且模型的 `type_vocab_size` 固定为 164 个物种。
@@ -44,7 +49,7 @@
 在仓库根目录执行：
 
 ```bash
-cd /home/runner/work/CodonTransformer/CodonTransformer
+cd <repo_root>
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -53,8 +58,8 @@ pip install -e .
 
 如果你使用的是集群环境，也可以参考：
 
-- `/home/runner/work/CodonTransformer/CodonTransformer/slurm/finetune.sh`
-- `/home/runner/work/CodonTransformer/CodonTransformer/slurm/pretrain.sh`
+- `<repo_root>/slurm/finetune.sh`
+- `<repo_root>/slurm/pretrain.sh`
 
 ---
 
@@ -103,7 +108,7 @@ pip install -e .
 建议先建立一个独立工作目录，便于反复训练与留档：
 
 ```text
-/home/runner/work/CodonTransformer/CodonTransformer/workflows/<your_species>/
+<repo_root>/workflows/<your_species>/
 ├── data/
 │   ├── raw/
 │   │   └── your_species_training.csv
@@ -153,20 +158,20 @@ ATGAAATGCTAG,MKC*,Escherichia coli general
 ```python
 import pandas as pd
 
-csv_path = "/home/runner/work/CodonTransformer/CodonTransformer/workflows/your_species/data/raw/your_species_training.csv"
+csv_path = "<work_dir>/data/raw/your_species_training.csv"
 df = pd.read_csv(csv_path)
 
 required = {"dna", "protein", "organism"}
 missing = required - set(df.columns)
 if missing:
-    raise ValueError(f"缺少列: {missing}")
+    raise ValueError(f"Missing required columns: {missing}")
 
 if df[["dna", "protein", "organism"]].isnull().any().any():
-    raise ValueError("存在空值，请先清理")
+    raise ValueError("Null values found; clean the dataset first.")
 
 bad_len = df["dna"].fillna("").map(len) % 3 != 0
 if bad_len.any():
-    raise ValueError("存在 DNA 长度不是 3 倍数的记录")
+    raise ValueError("Some DNA sequences do not have lengths divisible by 3.")
 
 print("记录数:", len(df))
 print("物种:", df["organism"].value_counts().to_dict())
@@ -181,13 +186,13 @@ CodonTransformer 训练并不直接读取 CSV，而是读取经过预处理后�
 执行示例：
 
 ```bash
-cd /home/runner/work/CodonTransformer/CodonTransformer
+cd <repo_root>
 python - <<'PY'
 from CodonTransformer.CodonData import prepare_training_data
 
 prepare_training_data(
-    "/home/runner/work/CodonTransformer/CodonTransformer/workflows/your_species/data/raw/your_species_training.csv",
-    "/home/runner/work/CodonTransformer/CodonTransformer/workflows/your_species/data/processed/training_data.json",
+    "<work_dir>/data/raw/your_species_training.csv",
+    "<work_dir>/data/processed/training_data.json",
 )
 PY
 ```
@@ -209,15 +214,15 @@ PY
 
 训练入口脚本为：
 
-`/home/runner/work/CodonTransformer/CodonTransformer/finetune.py`
+`<repo_root>/finetune.py`
 
 最小示例：
 
 ```bash
-cd /home/runner/work/CodonTransformer/CodonTransformer
+cd <repo_root>
 python finetune.py \
-  --dataset_dir "/home/runner/work/CodonTransformer/CodonTransformer/workflows/your_species/data/processed/training_data.json" \
-  --checkpoint_dir "/home/runner/work/CodonTransformer/CodonTransformer/workflows/your_species/checkpoints" \
+  --dataset_dir "<work_dir>/data/processed/training_data.json" \
+  --checkpoint_dir "<work_dir>/checkpoints" \
   --checkpoint_filename "finetune.ckpt" \
   --batch_size 6 \
   --max_epochs 15 \
@@ -264,14 +269,14 @@ python finetune.py \
 执行示例：
 
 ```bash
-cd /home/runner/work/CodonTransformer/CodonTransformer
+cd <repo_root>
 python - <<'PY'
 from CodonTransformer.CodonPrediction import create_model_from_checkpoint
 from CodonTransformer.CodonUtils import NUM_ORGANISMS
 
 create_model_from_checkpoint(
-    checkpoint_dir="/home/runner/work/CodonTransformer/CodonTransformer/workflows/your_species/checkpoints/finetune.ckpt",
-    output_model_dir="/home/runner/work/CodonTransformer/CodonTransformer/workflows/your_species/checkpoints/final_model.pt",
+    checkpoint_dir="<work_dir>/checkpoints/finetune.ckpt",
+    output_model_dir="<work_dir>/checkpoints/final_model.pt",
     num_organisms=NUM_ORGANISMS,
 )
 PY
@@ -290,7 +295,7 @@ PY
 建议至少用几条已知蛋白序列做 sanity check，确认模型可以正常生成目标物种偏好的 DNA。
 
 ```bash
-cd /home/runner/work/CodonTransformer/CodonTransformer
+cd <repo_root>
 python - <<'PY'
 import torch
 from transformers import AutoTokenizer
@@ -304,7 +309,7 @@ output = predict_dna_sequence(
     organism="Escherichia coli general",
     device=device,
     tokenizer=tokenizer,
-    model="/home/runner/work/CodonTransformer/CodonTransformer/workflows/your_species/checkpoints/final_model.pt",
+    model="<work_dir>/checkpoints/final_model.pt",
     attention_type="original_full",
     deterministic=True,
 )
