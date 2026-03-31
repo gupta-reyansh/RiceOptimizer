@@ -88,11 +88,20 @@ class plTrainHarness(pl.LightningModule):
             self.model.parameters(),
             lr=self.learning_rate,
         )
+        total_steps = getattr(self.trainer, "estimated_stepping_batches", None)
+        try:
+            total_steps = int(total_steps)
+        except (TypeError, ValueError, OverflowError):
+            return optimizer
+
+        if total_steps <= 0:
+            return optimizer
+
         lr_scheduler = {
             "scheduler": torch.optim.lr_scheduler.OneCycleLR(
                 optimizer,
                 max_lr=self.learning_rate,
-                total_steps=self.trainer.estimated_stepping_batches,
+                total_steps=total_steps,
                 pct_start=self.warmup_fraction,
             ),
             "interval": "step",
