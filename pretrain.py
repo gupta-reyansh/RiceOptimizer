@@ -70,9 +70,11 @@ class MaskedTokenizerCollator:
 
         # 80% of the time, replace masked input tokens with respective mask tokens
         replaced = torch.bernoulli(torch.full(selected.shape, 0.8)).bool() & selected
-        inputs[replaced] = torch.tensor(
-            list((map(TOKEN2MASK.__getitem__, inputs[replaced].numpy())))
-        )
+        if replaced.any():
+            inputs[replaced] = torch.tensor(
+                list(map(TOKEN2MASK.__getitem__, inputs[replaced].tolist())),
+                dtype=inputs.dtype,
+            )
 
         # 10% of the time, we replace masked input tokens with random vector.
         randomized = (
