@@ -14,7 +14,12 @@ import os
 import pytorch_lightning as pl
 import torch
 from torch.utils.data import DataLoader
-from transformers import BigBirdConfig, BigBirdForMaskedLM, PreTrainedTokenizerFast
+from transformers import (
+    AutoTokenizer,
+    BigBirdConfig,
+    BigBirdForMaskedLM,
+    PreTrainedTokenizerFast,
+)
 
 from CodonTransformer.CodonUtils import (
     MAX_LEN,
@@ -27,6 +32,18 @@ from CodonTransformer.CodonUtils import (
 class MaskedTokenizerCollator:
     def __init__(self, tokenizer):
         self.tokenizer = tokenizer
+
+    @staticmethod
+    def _ensure_mask_per_example(selected, inputs):
+        eligible = inputs >= 5
+        missing = ~selected.any(dim=1) & eligible.any(dim=1)
+        if not missing.any():
+            return selected
+
+        rows = missing.nonzero(as_tuple=False).flatten()
+        cols = eligible[missing].to(dtype=torch.int64).argmax(dim=1)
+        selected[rows, cols] = True
+        return selected
 
     def __call__(self, examples):
         tokenized = self.tokenizer(
@@ -49,12 +66,15 @@ class MaskedTokenizerCollator:
         prob_matrix = torch.full(inputs.shape, 0.15)
         prob_matrix[inputs < 5] = 0.0
         selected = torch.bernoulli(prob_matrix).bool()
+        selected = self._ensure_mask_per_example(selected, inputs)
 
         # 80% of the time, replace masked input tokens with respective mask tokens
         replaced = torch.bernoulli(torch.full(selected.shape, 0.8)).bool() & selected
-        inputs[replaced] = torch.tensor(
-            list((map(TOKEN2MASK.__getitem__, inputs[replaced].numpy())))
-        )
+        if replaced.any():
+            inputs[replaced] = torch.tensor(
+                list(map(TOKEN2MASK.__getitem__, inputs[replaced].tolist())),
+                dtype=inputs.dtype,
+            )
 
         # 10% of the time, we replace masked input tokens with random vector.
         randomized = (
@@ -83,11 +103,20 @@ class plTrainHarness(pl.LightningModule):
             self.model.parameters(),
             lr=self.learning_rate,
         )
+        total_steps = getattr(self.trainer, "estimated_stepping_batches", None)
+        try:
+            total_steps = int(total_steps)
+        except (TypeError, ValueError, OverflowError):
+            return optimizer
+
+        if total_steps <= 0:
+            return optimizer
+
         lr_scheduler = {
             "scheduler": torch.optim.lr_scheduler.OneCycleLR(
                 optimizer,
                 max_lr=self.learning_rate,
-                total_steps=self.trainer.estimated_stepping_batches,
+                total_steps=total_steps,
                 pct_start=self.warmup_fraction,
             ),
             "interval": "step",
@@ -96,7 +125,6 @@ class plTrainHarness(pl.LightningModule):
         return [optimizer], [lr_scheduler]
 
     def training_step(self, batch, batch_idx):
-        self.model.bert.set_attention_type("block_sparse")
         outputs = self.model(**batch)
         self.log_dict(
             dictionary={
@@ -125,28 +153,44 @@ class EpochCheckpoint(pl.Callback):
             print(f"\nCheckpoint saved at {checkpoint_path}\n")
 
 
+def build_bigbird_config(tokenizer_length, type_vocab_size):
+    return BigBirdConfig(
+        vocab_size=tokenizer_length,
+        type_vocab_size=type_vocab_size,
+        sep_token_id=2,
+        attention_type="block_sparse",
+        max_position_embeddings=MAX_LEN,
+        block_size=32,
+    )
+
+
+def select_trainer_strategy(num_devices):
+    return "auto" if num_devices == 1 else "ddp_find_unused_parameters_true"
+
+
 def main(args):
     """Pretrain the CodonTransformer model."""
     pl.seed_everything(args.seed)
     torch.set_float32_matmul_precision("medium")
 
     # Load the tokenizer and model
-    tokenizer = PreTrainedTokenizerFast(
-        tokenizer_file=args.tokenizer_path,
-        bos_token="[CLS]",
-        eos_token="[SEP]",
-        unk_token="[UNK]",
-        sep_token="[SEP]",
-        pad_token="[PAD]",
-        cls_token="[CLS]",
-        mask_token="[MASK]",
-    )
-    config = BigBirdConfig(
-        vocab_size=len(tokenizer),
-        type_vocab_size=NUM_ORGANISMS,
-        sep_token_id=2,
-    )
+    if args.tokenizer_path:
+        tokenizer = PreTrainedTokenizerFast(
+            tokenizer_file=args.tokenizer_path,
+            bos_token="[CLS]",
+            eos_token="[SEP]",
+            unk_token="[UNK]",
+            sep_token="[SEP]",
+            pad_token="[PAD]",
+            cls_token="[CLS]",
+            mask_token="[MASK]",
+        )
+    else:
+        tokenizer = AutoTokenizer.from_pretrained("adibvafa/CodonTransformer")
+    config = build_bigbird_config(len(tokenizer), args.type_vocab_size)
     model = BigBirdForMaskedLM(config=config)
+    model.bert.set_attention_type(config.attention_type)
+    model.gradient_checkpointing_enable()
     harnessed_model = plTrainHarness(model, args.learning_rate, args.warmup_fraction)
 
     # Load the training data
@@ -161,11 +205,12 @@ def main(args):
 
     # Setup trainer and callbacks
     save_checkpoint = EpochCheckpoint(args.checkpoint_dir, args.save_interval)
+    num_devices = 1 if args.debug else args.num_gpus
     trainer = pl.Trainer(
         default_root_dir=args.checkpoint_dir,
-        strategy="ddp_find_unused_parameters_true",
+        strategy=select_trainer_strategy(num_devices),
         accelerator="gpu",
-        devices=1 if args.debug else args.num_gpus,
+        devices=num_devices,
         precision="16-mixed",
         max_epochs=args.max_epochs,
         deterministic=False,
@@ -183,8 +228,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--tokenizer_path",
         type=str,
-        required=True,
-        help="Path to the tokenizer model file",
+        default="",
+        help="Path to the tokenizer model file. If omitted, loads the default Hugging Face tokenizer.",
     )
     parser.add_argument(
         "--train_data_path",
@@ -233,6 +278,12 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--seed", type=int, default=123, help="Random seed for reproducibility"
+    )
+    parser.add_argument(
+        "--type_vocab_size",
+        type=int,
+        default=NUM_ORGANISMS,
+        help="Size of the organism embedding vocabulary.",
     )
     parser.add_argument("--debug", action="store_true", help="Enable debug mode")
     args = parser.parse_args()

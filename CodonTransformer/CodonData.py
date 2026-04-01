@@ -34,7 +34,10 @@ from CodonTransformer.CodonUtils import (
 
 
 def prepare_training_data(
-    dataset: Union[str, pd.DataFrame], output_file: str, shuffle: bool = True
+    dataset: Union[str, pd.DataFrame],
+    output_file: str,
+    shuffle: bool = True,
+    organism_to_id: Optional[Dict[str, int]] = None,
 ) -> None:
     """
     Prepare a JSON dataset for training the CodonTransformer model.
@@ -53,6 +56,8 @@ def prepare_training_data(
         output_file (str): Path to save the output JSON dataset.
         shuffle (bool, optional): Whether to shuffle the dataset before saving.
             Defaults to True.
+        organism_to_id (Optional[Dict[str, int]], optional): Mapping used to convert
+            organism names to integer ids. Defaults to ORGANISM2ID.
 
     Returns:
         None
@@ -64,14 +69,17 @@ def prepare_training_data(
     if not required_columns.issubset(dataset.columns):
         raise ValueError(f"Input dataset must have columns: {required_columns}")
 
-    # Prepare the dataset for finetuning
+    # Prepare the dataset for training
     dataset["codons"] = dataset.apply(
         lambda row: get_merged_seq(row["protein"], row["dna"], separator="_"), axis=1
     )
 
-    # Replace organism str with organism id using ORGANISM2ID
+    if organism_to_id is None:
+        organism_to_id = ORGANISM2ID
+
+    # Replace organism str with organism id using organism_to_id
     dataset["organism"] = dataset["organism"].apply(
-        lambda org: process_organism(org, ORGANISM2ID)
+        lambda org: process_organism(org, organism_to_id)
     )
 
     # Save the dataset to a JSON file
@@ -387,6 +395,7 @@ def read_fasta_file(
     input_file: str,
     save_to_file: Optional[str] = None,
     organism: str = "",
+    codon_table: Optional[int] = None,
     buffer_size: int = 50000,
 ) -> pd.DataFrame:
     """
@@ -399,6 +408,8 @@ def read_fasta_file(
             data is only returned.
         organism (str): Name of the organism. If empty, it will be extracted from
             the FASTA description.
+        codon_table (Optional[int]): Explicit NCBI codon table id to use for
+            translation. If None, the codon table is inferred from the organism.
         buffer_size (int): Number of records to process before writing to file.
 
     Returns:
@@ -440,13 +451,13 @@ def read_fasta_file(
             gene_id = find_pattern_in_fasta("GeneID", record.description)
 
             # Get the appropriate codon table for the organism
-            codon_table = get_codon_table(current_organism)
+            current_codon_table = codon_table or get_codon_table(current_organism)
 
             # Translate DNA to protein sequence
             protein, correct_seq = get_amino_acid_sequence(
                 dna,
                 stop_symbol=STOP_SYMBOL,
-                codon_table=codon_table,
+                codon_table=current_codon_table,
                 return_correct_seq=True,
             )
             description = record.description.split("[", 1)[0].strip()

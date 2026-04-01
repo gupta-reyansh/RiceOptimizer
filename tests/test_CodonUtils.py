@@ -2,8 +2,10 @@ import os
 import pickle
 import tempfile
 import unittest
+import gzip
 
 from CodonTransformer.CodonUtils import (
+    IterableJSONData,
     ProteinConfig,
     find_pattern_in_fasta,
     get_organism2id_dict,
@@ -119,6 +121,51 @@ class TestCodonUtils(unittest.TestCase):
             mock_get.return_value.content = pickle.dumps(expected_obj)
             loaded_obj = load_pkl_from_url(url)
         self.assertEqual(loaded_obj, expected_obj)
+
+    def test_iterable_json_data_reads_jsonl(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as temp:
+            temp.write('{"idx": 0, "codons": "M_ATG __TAA", "organism": 0}\n')
+            temp.write("\n")
+            temp.write('{"idx": 1, "codons": "M_ATG K_AAA __TAA", "organism": 0}\n')
+            temp_path = temp.name
+
+        try:
+            rows = list(IterableJSONData(temp_path))
+            self.assertEqual(len(rows), 2)
+            self.assertEqual(rows[0]["idx"], 0)
+            self.assertEqual(rows[1]["organism"], 0)
+        finally:
+            os.remove(temp_path)
+
+    def test_iterable_json_data_reads_gzipped_jsonl(self):
+        with tempfile.NamedTemporaryFile(suffix=".json.gz", delete=False) as temp:
+            temp_path = temp.name
+
+        try:
+            with gzip.open(temp_path, "wt", encoding="utf-8") as handle:
+                handle.write('{"idx": 0, "codons": "M_ATG __TAA", "organism": 0}\n')
+
+            rows = list(IterableJSONData(temp_path))
+            self.assertEqual(rows[0]["codons"], "M_ATG __TAA")
+        finally:
+            os.remove(temp_path)
+
+    def test_iterable_data_defaults_without_slurm_env(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as temp:
+            temp.write('{"idx": 0, "codons": "M_ATG __TAA", "organism": 0}\n')
+            temp_path = temp.name
+
+        dataset = IterableJSONData(temp_path, dist_env="slurm")
+        worker_info = unittest.mock.Mock(id=1, num_workers=3)
+
+        try:
+            with unittest.mock.patch(
+                "torch.utils.data.get_worker_info", return_value=worker_info
+            ), unittest.mock.patch.dict(os.environ, {}, clear=True):
+                rows = list(dataset)
+            self.assertEqual(rows, [])
+        finally:
+            os.remove(temp_path)
 
 
 if __name__ == "__main__":

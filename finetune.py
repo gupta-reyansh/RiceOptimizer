@@ -28,6 +28,18 @@ class MaskedTokenizerCollator:
     def __init__(self, tokenizer):
         self.tokenizer = tokenizer
 
+    @staticmethod
+    def _ensure_mask_per_example(selected, inputs):
+        eligible = inputs >= 5
+        missing = ~selected.any(dim=1) & eligible.any(dim=1)
+        if not missing.any():
+            return selected
+
+        rows = missing.nonzero(as_tuple=False).flatten()
+        cols = eligible[missing].to(dtype=torch.int64).argmax(dim=1)
+        selected[rows, cols] = True
+        return selected
+
     def __call__(self, examples):
         tokenized = self.tokenizer(
             [ex["codons"] for ex in examples],
@@ -49,12 +61,15 @@ class MaskedTokenizerCollator:
         prob_matrix = torch.full(inputs.shape, 0.15)
         prob_matrix[torch.where(inputs < 5)] = 0.0
         selected = torch.bernoulli(prob_matrix).bool()
+        selected = self._ensure_mask_per_example(selected, inputs)
 
         # 80% of the time, replace masked input tokens with respective mask tokens
         replaced = torch.bernoulli(torch.full(selected.shape, 0.8)).bool() & selected
-        inputs[replaced] = torch.tensor(
-            list((map(TOKEN2MASK.__getitem__, inputs[replaced].numpy())))
-        )
+        if replaced.any():
+            inputs[replaced] = torch.tensor(
+                list(map(TOKEN2MASK.__getitem__, inputs[replaced].tolist())),
+                dtype=inputs.dtype,
+            )
 
         # 10% of the time, we replace masked input tokens with random vector.
         randomized = (
@@ -83,11 +98,20 @@ class plTrainHarness(pl.LightningModule):
             self.model.parameters(),
             lr=self.learning_rate,
         )
+        total_steps = getattr(self.trainer, "estimated_stepping_batches", None)
+        try:
+            total_steps = int(total_steps)
+        except (TypeError, ValueError, OverflowError):
+            return optimizer
+
+        if total_steps <= 0:
+            return optimizer
+
         lr_scheduler = {
             "scheduler": torch.optim.lr_scheduler.OneCycleLR(
                 optimizer,
                 max_lr=self.learning_rate,
-                total_steps=self.trainer.estimated_stepping_batches,
+                total_steps=total_steps,
                 pct_start=self.warmup_fraction,
             ),
             "interval": "step",
