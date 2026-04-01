@@ -4,7 +4,9 @@ from unittest import mock
 import torch
 
 from finetune import plTrainHarness as FinetuneTrainHarness
+from finetune import MaskedTokenizerCollator as FinetuneMaskedTokenizerCollator
 from pretrain import (
+    MaskedTokenizerCollator as PretrainMaskedTokenizerCollator,
     build_bigbird_config,
     plTrainHarness as PretrainTrainHarness,
     select_trainer_strategy,
@@ -21,6 +23,17 @@ class DummyModel(torch.nn.Module):
     def __init__(self):
         super().__init__()
         self.layer = torch.nn.Linear(1, 1)
+
+
+class DummyTokenizer:
+    def __call__(self, sequences, **kwargs):
+        batch_size = len(sequences)
+        input_ids = torch.tensor([[1, 40, 74, 2]] * batch_size)
+        return {
+            "input_ids": input_ids,
+            "attention_mask": torch.ones_like(input_ids),
+            "token_type_ids": torch.zeros_like(input_ids),
+        }
 
 
 class TestTrainingHarnessSchedulers(unittest.TestCase):
@@ -79,6 +92,26 @@ class TestTrainingConfiguration(unittest.TestCase):
 
         self.assertEqual(args.batch_size, 1)
         self.assertEqual(args.accumulate_grad_batches, 6)
+
+    def test_pretrain_collator_keeps_at_least_one_masked_label(self):
+        collator = PretrainMaskedTokenizerCollator(DummyTokenizer())
+
+        with mock.patch("torch.bernoulli", side_effect=lambda tensor: torch.zeros_like(tensor)):
+            batch = collator([{"codons": "M_ATG __TAA", "organism": 0}])
+
+        self.assertTrue(torch.any(batch["labels"] != -100))
+        self.assertEqual(batch["labels"][0, 0].item(), -100)
+        self.assertEqual(batch["labels"][0, -1].item(), -100)
+
+    def test_finetune_collator_keeps_at_least_one_masked_label(self):
+        collator = FinetuneMaskedTokenizerCollator(DummyTokenizer())
+
+        with mock.patch("torch.bernoulli", side_effect=lambda tensor: torch.zeros_like(tensor)):
+            batch = collator([{"codons": "M_ATG __TAA", "organism": 0}])
+
+        self.assertTrue(torch.any(batch["labels"] != -100))
+        self.assertEqual(batch["labels"][0, 0].item(), -100)
+        self.assertEqual(batch["labels"][0, -1].item(), -100)
 
 
 if __name__ == "__main__":
