@@ -8,7 +8,8 @@ prepare the dataset. The repository README has a guide on how to prepare the
 dataset and use this script.
 """
 class Loss_Plot:
-    self.losses=[]
+    def __init__(self):
+        self.losses=[]
     def export_losses(self, filename="loss_history.csv"):
         with open(filename, mode="w", newline="") as file:
             writer = csv.writer(file)
