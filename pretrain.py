@@ -7,10 +7,25 @@ The dataset is a JSON file. You can use prepare_training_data from CodonData to
 prepare the dataset. The repository README has a guide on how to prepare the
 dataset and use this script.
 """
+class Loss_Plot:
+    self.losses=[]
+    def export_losses(self, filename="loss_history.csv"):
+        with open(filename, mode="w", newline="") as file:
+            writer = csv.writer(file)
+            
+            # 1. Write the header row
+            writer.writerow(["Step", "Loss"])
+            
+            # 2. Write the 1D array data row by row
+            for step, loss in enumerate(self.losses, start=1):
+                writer.writerow([step, loss])
+        
+        
+loss_plot=Loss_Plot()
 
 import argparse
 import os
-
+import csv
 import pytorch_lightning as pl
 import torch
 from torch.utils.data import DataLoader
@@ -134,6 +149,7 @@ class plTrainHarness(pl.LightningModule):
             on_step=True,
             prog_bar=True,
         )
+        Loss_Plot.append(output.loss)
         return outputs.loss
 
 
@@ -150,6 +166,7 @@ class EpochCheckpoint(pl.Callback):
                 self.checkpoint_dir, f"epoch_{current_epoch}.ckpt"
             )
             trainer.save_checkpoint(checkpoint_path)
+            loss_plot.export_losses()
             print(f"\nCheckpoint saved at {checkpoint_path}\n")
 
 
