@@ -149,7 +149,7 @@ class plTrainHarness(pl.LightningModule):
             on_step=True,
             prog_bar=True,
         )
-        loss_plot.losses.append(output.loss)
+        loss_plot.losses.append(outputs.loss)
         return outputs.loss
 
 
