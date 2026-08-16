@@ -8,8 +8,7 @@ prepare the dataset. The repository README has a guide on how to prepare the
 dataset and use this script.
 """
 class Loss_Plot:
-    def __init__(self):
-        self.losses=[]
+    losses=[]
     def export_losses(self, filename="loss_history.csv"):
         with open(filename, mode="w", newline="") as file:
             writer = csv.writer(file)
@@ -18,7 +17,7 @@ class Loss_Plot:
             writer.writerow(["Step", "Loss"])
             
             # 2. Write the 1D array data row by row
-            for step, loss in enumerate(self.losses, start=1):
+            for step, loss in enumerate(losses, start=1):
                 writer.writerow([step, loss])
         
         
@@ -150,7 +149,7 @@ class plTrainHarness(pl.LightningModule):
             on_step=True,
             prog_bar=True,
         )
-        Loss_Plot.append(output.loss)
+        loss_plot.losses.append(output.loss)
         return outputs.loss
 
 
