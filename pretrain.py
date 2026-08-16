@@ -7,8 +7,8 @@ The dataset is a JSON file. You can use prepare_training_data from CodonData to
 prepare the dataset. The repository README has a guide on how to prepare the
 dataset and use this script.
 """
+losses=[]
 class Loss_Plot:
-    losses=[]
     def export_losses(self, filename="loss_history.csv"):
         with open(filename, mode="w", newline="") as file:
             writer = csv.writer(file)
@@ -149,7 +149,7 @@ class plTrainHarness(pl.LightningModule):
             on_step=True,
             prog_bar=True,
         )
-        loss_plot.losses.append(outputs.loss)
+        losses.append(outputs.loss)
         return outputs.loss
 
 
